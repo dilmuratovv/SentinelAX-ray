@@ -75,6 +75,6 @@ jobs:
           PAPER: ${{ matrix.paper }}
         run: |
           retry() { for i in 1 2 3; do "$@" && return 0; echo "attempt $i failed"; sleep 15; done; return 1; }
-          retry mvn -B -ntp -q -f tools/api-classpath/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath -Dpaper.version=1.21-R0.1-SNAPSHOT -Dmdep.outputFile="$PWD/baseline.txt"
-          retry mvn -B -ntp -q -f tools/api-classpath/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath -Dpaper.version="$PAPER" -Dmdep.outputFile="$PWD/target.txt"
+          retry mvn -B -ntp -q -U -f tools/api-classpath/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath -Dpaper.version=1.21-R0.1-SNAPSHOT -Dmdep.outputFile="$PWD/baseline.txt"
+          retry mvn -B -ntp -q -U -f tools/api-classpath/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath -Dpaper.version="$PAPER" -Dmdep.outputFile="$PWD/target.txt"
           python3 tools/api_compat.py --jar dist/SentinelAX-ray-*-paper.jar --refs-cache dist/api-refs.tsv --java "$JAVA_HOME/bin/java" --baseline-classpath "$(cat baseline.txt)" --classpath "$(cat target.txt)"
