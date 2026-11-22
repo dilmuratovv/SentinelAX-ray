@@ -6,6 +6,7 @@
 
 An anti-xray plugin by **azicoo** for Paper servers: it sets up Paper's native anti-xray engine correctly for every world, and analyses mining to catch the cheats that obfuscation alone cannot stop.
 
+[![Build](https://github.com/dilmuratovv/SentinelAX-ray/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/dilmuratovv/SentinelAX-ray/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/dilmuratovv/SentinelAX-ray?color=ec4899&label=release)](https://github.com/dilmuratovv/SentinelAX-ray/releases)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 [![Paper](https://img.shields.io/badge/paper-1.21%20%E2%80%93%2026.3-0ea5e9.svg)](#compatibility)
@@ -23,9 +24,23 @@ Paper already ships a strong anti-xray engine that rewrites chunk packets before
 
 **One JAR for every supported Paper version** (1.21 to 26.3). Players can join with any client version through ViaVersion/ViaBackwards: Paper hides the ores before the chunk is translated, so every client gets the same protected chunk.
 
-SentinelAX-ray is part of the **Sentinel suite** — [SentinelAC](https://github.com/dilmuratovv/SentinelAC) (anticheat), [SentinelGuard](https://github.com/dilmuratovv/SentinelGuard) (moderation), [SentinelAD](https://github.com/dilmuratovv/SentinelAD) (anti-dupe) and [SentinelAE](https://github.com/dilmuratovv/SentinelAE) (anti-ESP). Each plugin works on its own; with SentinelGuard 2.2+ installed, suspicious-mining flags land in `/sus` automatically.
+It is part of the [Sentinel suite](#sentinel-suite).
 
 **Created and maintained by azicoo.**
+
+## Sentinel suite
+
+Five plugins by **azicoo**, each with its own repository and release. Every one works on its own.
+
+| Plugin | What it does |
+|---|---|
+| [SentinelAC](https://github.com/dilmuratovv/SentinelAC) | Anticheat: prediction-based movement, combat and packet checks. |
+| [SentinelAD](https://github.com/dilmuratovv/SentinelAD) | Anti-dupe: a global item ledger that removes duplicated items. |
+| [SentinelAE](https://github.com/dilmuratovv/SentinelAE) | Anti-ESP: hidden players and armor stands are never sent to the client. |
+| [SentinelAX-ray](https://github.com/dilmuratovv/SentinelAX-ray) | Anti-xray: Paper's native engine set up per world, plus mining analysis. |
+| [SentinelGuard](https://github.com/dilmuratovv/SentinelGuard) | Moderation: bans, mutes, history, `/sus`; collects the flags of AC, AD and AX-ray. |
+
+Together: SentinelGuard adds the findings of SentinelAC, SentinelAD and SentinelAX-ray to `/sus`, and `/sg status` shows the state of SentinelAE and SentinelAX-ray. All five are GPL-3.0 and run on Paper 1.21 to 26.3 with one JAR each (SentinelGuard also has a Velocity JAR).
 
 ## Features
 
@@ -127,7 +142,7 @@ cd SentinelAX-ray
 mvn -B package
 ```
 
-The JAR appears in `target/SentinelAX-ray-<version>-paper.jar`.
+The JAR appears in `plugin/target/SentinelAX-ray-<version>-paper.jar`.
 
 ## Releases
 

@@ -1,0 +1,79 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build and test
+        run: mvn -B -ntp verify
+      - name: Extract the platform API the JAR links against
+        run: python3 tools/api_compat.py --extract-only --jar plugin/target/SentinelAX-ray-*-paper.jar --refs-cache plugin/target/api-refs.tsv
+      - name: Collect the build
+        run: |
+          mkdir -p dist
+          cp plugin/target/SentinelAX-ray-*-paper.jar plugin/target/api-refs.tsv dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SentinelAX-ray-jar
+          path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-reports
+          path: plugin/target/surefire-reports/*.txt
+          if-no-files-found: warn
+  # One JAR is compiled against the oldest API (Paper 1.21); here every supported version is checked to contain each
+  # class, method and field the JAR uses, with the same signature.
+  api:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: '1.21', paper: '1.21-R0.1-SNAPSHOT', java: '21'}
+          - {target: '1.21.1', paper: '1.21.1-R0.1-SNAPSHOT', java: '21'}
+          - {target: '1.21.3', paper: '1.21.3-R0.1-SNAPSHOT', java: '21'}
+          - {target: '1.21.4', paper: '1.21.4-R0.1-SNAPSHOT', java: '21'}
+          - {target: '1.21.5', paper: '1.21.5-R0.1-SNAPSHOT', java: '21'}
+          - {target: '1.21.6', paper: '1.21.6-R0.1-SNAPSHOT', java: '21'}
+          - {target: '1.21.7', paper: '1.21.7-R0.1-SNAPSHOT', java: '21'}
+          - {target: '1.21.8', paper: '1.21.8-R0.1-SNAPSHOT', java: '21'}
+          - {target: '1.21.9', paper: '1.21.9-R0.1-SNAPSHOT', java: '21'}
+          - {target: '1.21.10', paper: '1.21.10-R0.1-SNAPSHOT', java: '21'}
+          - {target: '1.21.11', paper: '1.21.11-R0.1-SNAPSHOT', java: '21'}
+          - {target: '26.1.1', paper: '26.1.1.build.29-alpha', java: '25'}
+          - {target: '26.1.2', paper: '26.1.2.build.74-stable', java: '25'}
+          - {target: '26.2', paper: '26.2.build.135-stable', java: '25'}
+          - {target: '26.3', paper: '26.3.build.230-stable', java: '25'}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+      - uses: actions/download-artifact@v4
+        with:
+          name: SentinelAX-ray-jar
+          path: dist
+      - name: Check the JAR against Paper ${{ matrix.target }}
+        env:
+          PAPER: ${{ matrix.paper }}
+        run: |
+          mvn -B -ntp -q -f tools/api-classpath/pom.xml dependency:build-classpath -Dpaper.version=1.21-R0.1-SNAPSHOT -Dmdep.outputFile="$PWD/baseline.txt"
+          mvn -B -ntp -q -f tools/api-classpath/pom.xml dependency:build-classpath -Dpaper.version="$PAPER" -Dmdep.outputFile="$PWD/target.txt"
+          python3 tools/api_compat.py --jar dist/SentinelAX-ray-*-paper.jar --refs-cache dist/api-refs.tsv --java "$JAVA_HOME/bin/java" --baseline-classpath "$(cat baseline.txt)" --classpath "$(cat target.txt)"
