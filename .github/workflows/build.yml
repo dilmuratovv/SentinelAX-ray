@@ -74,6 +74,6 @@ jobs:
         env:
           PAPER: ${{ matrix.paper }}
         run: |
-          mvn -B -ntp -q -f tools/api-classpath/pom.xml dependency:build-classpath -Dpaper.version=1.21-R0.1-SNAPSHOT -Dmdep.outputFile="$PWD/baseline.txt"
-          mvn -B -ntp -q -f tools/api-classpath/pom.xml dependency:build-classpath -Dpaper.version="$PAPER" -Dmdep.outputFile="$PWD/target.txt"
+          mvn -B -ntp -q -f tools/api-classpath/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath -Dpaper.version=1.21-R0.1-SNAPSHOT -Dmdep.outputFile="$PWD/baseline.txt"
+          mvn -B -ntp -q -f tools/api-classpath/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.8.1:build-classpath -Dpaper.version="$PAPER" -Dmdep.outputFile="$PWD/target.txt"
           python3 tools/api_compat.py --jar dist/SentinelAX-ray-*-paper.jar --refs-cache dist/api-refs.tsv --java "$JAVA_HOME/bin/java" --baseline-classpath "$(cat baseline.txt)" --classpath "$(cat target.txt)"
