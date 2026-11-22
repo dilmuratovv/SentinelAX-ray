@@ -1,0 +1,22 @@
+name: SentinelAX-ray
+version: '${project.version}'
+main: uz.sentinel.xray.SentinelAXray
+api-version: '1.21'
+description: Anti-Xray for Paper (native engine setup and mining analysis)
+authors: [azicoo]
+website: https://github.com/dilmuratovv/SentinelAX-ray
+softdepend: [SentinelGuard]
+commands:
+  sxray:
+    description: SentinelAX-ray status and administration
+    aliases: [saxray, sentinelaxray]
+    permission: sentinelaxray.admin
+    usage: /sxray <status|apply [--dry-run]|reload|stats <player>|testflag <player>>
+permissions:
+  sentinelaxray.admin:
+    default: op
+    children:
+      sentinelaxray.alerts: true
+  sentinelaxray.alerts:
+    description: Receives suspicious-mining alerts
+    default: op

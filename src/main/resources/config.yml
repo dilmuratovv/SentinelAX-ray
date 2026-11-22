@@ -1,0 +1,57 @@
+# SentinelAX-ray
+# 1) Paper's native anti-xray engine rewrites every chunk packet before it leaves the server, so an x-ray client
+#    never receives the real positions of hidden ores. This plugin writes the right settings into each world's
+#    paper-world.yml: run /sxray apply, then restart Paper. /sxray status shows what is really running.
+# 2) Mining analysis flags players who keep digging straight to hidden ore veins (ore simulators / seed crackers
+#    bypass obfuscation, this catches them). Alerts only; nothing is blocked or punished.
+
+engine:
+  # 1 = hide:            hidden ores not touching air are sent as stone/deepslate/netherrack. Cheapest.
+  # 2 = obfuscate:       additionally every replacement block not touching air is sent as a random hidden block,
+  #                      so an x-ray client sees ores everywhere. Strongest, more bandwidth.
+  # 3 = obfuscate-layer: like 2, but one random block per layer; strong and cheaper than 2 (recommended).
+  mode: 3
+  # 2 = also re-send real blocks two blocks around a broken block (Paper's maximum, recommended).
+  update-radius: 2
+  lava-obscures: false
+  use-permission: false
+  # Write engine settings automatically at every start (a backup of paper-world.yml is kept; the first time it still
+  # needs one restart to take effect). Set false to only change files through /sxray apply.
+  auto-apply: true
+  # Ore simulators compute ore positions from the world seed and ignore obfuscation. true gives every feature a
+  # random seed in NEWLY generated chunks (existing chunks keep their ores). "unchanged" leaves the setting alone.
+  random-feature-seeds: unchanged
+  overworld:
+    # Highest y (exclusive, multiple of 16) the engine works up to. 64 covers diamonds, gold, redstone, lapis and
+    # most iron/copper; higher costs more CPU and bandwidth.
+    max-block-height: 64
+    hidden-blocks: [copper_ore, deepslate_copper_ore, raw_copper_block, gold_ore, deepslate_gold_ore, iron_ore,
+      deepslate_iron_ore, raw_iron_block, coal_ore, deepslate_coal_ore, lapis_ore, deepslate_lapis_ore,
+      mossy_cobblestone, obsidian, chest, diamond_ore, deepslate_diamond_ore, redstone_ore, deepslate_redstone_ore,
+      clay, emerald_ore, deepslate_emerald_ore, ender_chest, spawner, amethyst_block, budding_amethyst]
+    replacement-blocks: [stone, oak_planks, deepslate, tuff, granite, diorite, andesite]
+  nether:
+    max-block-height: 128
+    hidden-blocks: [ancient_debris, nether_gold_ore, nether_quartz_ore, gilded_blackstone, chest, spawner]
+    replacement-blocks: [netherrack, basalt, blackstone]
+
+detection:
+  enabled: true
+  # Creative players are not analysed.
+  ignore-creative: true
+  # Mining older than this is forgotten.
+  window-minutes: 30
+  # Flag when a player found at least min-hidden-veins valuable veins that nothing had exposed (no cave, no other
+  # tunnel), while mining fewer than max-filler-per-vein filler blocks per such vein. Legit branch mining needs
+  # roughly 100+ blocks per diamond vein; digging straight to them needs far fewer.
+  min-hidden-veins: 5
+  max-filler-per-vein: 40
+  # Filler blocks above this y in the overworld (building, terraforming) are not counted.
+  overworld-filler-max-y: 64
+  alert-cooldown-seconds: 120
+  valuable:
+    diamond: [diamond_ore, deepslate_diamond_ore]
+    debris: [ancient_debris]
+    emerald: [emerald_ore, deepslate_emerald_ore]
+  filler: [stone, deepslate, tuff, granite, diorite, andesite, calcite, dripstone_block, smooth_basalt,
+    netherrack, basalt, blackstone]
