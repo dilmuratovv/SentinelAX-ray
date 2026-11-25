@@ -21,12 +21,23 @@ import org.bukkit.plugin.java.JavaPlugin;
  */
 public final class SentinelAXray extends JavaPlugin {
     private MiningMonitor monitor;
+    private uz.sentinel.xray.los.OreLayer layer;
+    private long ticks;
 
     @Override public void onEnable() {
         saveDefaultConfig();
         monitor = new MiningMonitor(this);
+        layer = new uz.sentinel.xray.los.OreLayer(this);
+        monitor.layer(layer);
         reloadSettings();
+        ConfigurationSection los = getConfig().getConfigurationSection("los");
+        if (layer.configure(los == null ? new YamlConfiguration() : los, getLogger()::warning) && layer.start(getLogger()::warning)) {
+            getLogger().info("Line-of-sight ore hiding on: valuable ores in caves and above the engine's height are only sent"
+                    + " once in sight (works without a restart).");
+        }
         getServer().getPluginManager().registerEvents(monitor, this);
+        getServer().getPluginManager().registerEvents(new LayerEvents(), this);
+        getServer().getScheduler().runTaskTimer(this, () -> layer.tick(++ticks), 1L, 1L);
         getServer().getScheduler().runTaskTimer(this, monitor::cleanup, 20L * 300, 20L * 300);
         // The 1.0.0 jar was called SentinelXray; both together double every alert and fight over paper-world.yml.
         for (String old : List.of("SentinelXray", "SentinelX-ray")) {
@@ -61,6 +72,51 @@ public final class SentinelAXray extends JavaPlugin {
         }
     }
 
+    @Override public void onDisable() {
+        if (layer != null) layer.releaseAll();
+    }
+
+    /** Hooks players into the line-of-sight layer and keeps its view in step with their chunks and worlds. */
+    private final class LayerEvents implements org.bukkit.event.Listener {
+        @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.LOWEST)
+        public void join(org.bukkit.event.player.PlayerJoinEvent e) { layer.inject(e.getPlayer()); }
+
+        @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.MONITOR)
+        public void quit(org.bukkit.event.player.PlayerQuitEvent e) { layer.remove(e.getPlayer()); }
+
+        @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.MONITOR)
+        public void unload(io.papermc.paper.event.packet.PlayerChunkUnloadEvent e) {
+            layer.chunkUnloaded(e.getPlayer(), e.getChunk().getX(), e.getChunk().getZ());
+        }
+
+        @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.MONITOR)
+        public void world(org.bukkit.event.player.PlayerChangedWorldEvent e) { layer.resetView(e.getPlayer()); }
+
+        @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.MONITOR)
+        public void respawn(org.bukkit.event.player.PlayerRespawnEvent e) { layer.resetView(e.getPlayer()); }
+
+        @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.MONITOR, ignoreCancelled = true)
+        public void broken(org.bukkit.event.block.BlockBreakEvent e) { layer.broken(e.getBlock()); }
+
+        @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.MONITOR, ignoreCancelled = true)
+        public void exploded(org.bukkit.event.entity.EntityExplodeEvent e) { for (var b : e.blockList()) layer.broken(b); }
+
+        /** Worlds loaded later (Multiverse...) get the engine settings too; they apply at the next restart. */
+        @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.MONITOR)
+        public void worldLoad(org.bukkit.event.world.WorldLoadEvent e) {
+            if (!eligible(e.getWorld()) || !getConfig().getBoolean("engine.auto-apply", true)) return;
+            try {
+                Path path = EngineProbe.configFile(e.getWorld());
+                if (WorldConfigWriter.apply(path, desired(e.getWorld()), featureSeeds(), false) != WorldConfigWriter.Result.UNCHANGED) {
+                    getLogger().info(e.getWorld().getName() + ": engine settings written to " + path + " (active after a restart;"
+                            + " the line-of-sight layer already protects it)");
+                }
+            } catch (IOException | InvalidConfigurationException | RuntimeException ex) {
+                getLogger().warning("Cannot configure " + e.getWorld().getName() + ": " + ex);
+            }
+        }
+    }
+
     /** Worlds whose engine is not running as configured, as status lines (shown to admins on join). */
     private final List<String> pending = new ArrayList<>();
 
@@ -83,10 +139,22 @@ public final class SentinelAXray extends JavaPlugin {
     }
 
     private EngineSettings desired(World w) {
+        return desired(w.getEnvironment() == World.Environment.NETHER ? "nether" : "overworld");
+    }
+
+    /**
+     * With the line-of-sight layer on, the engine runs in mode 1: it hides ores that touch no air and the layer hides
+     * the rest, so an x-ray client sees no valuable ore at all. Modes 2/3 would add fake ores by the thousand, which
+     * the layer would then have to track one by one.
+     */
+    private EngineSettings desired(String dimension) {
         ConfigurationSection engine = getConfig().getConfigurationSection("engine");
         if (engine == null) engine = new YamlConfiguration();
-        return EngineSettings.from(engine, w.getEnvironment() == World.Environment.NETHER ? "nether" : "overworld",
-                getLogger()::warning);
+        EngineSettings s = EngineSettings.from(engine, dimension, getLogger()::warning);
+        if (layer != null && layer.active() && s.mode() != 1) {
+            s = new EngineSettings(1, s.maxBlockHeight(), s.updateRadius(), s.lavaObscures(), s.usePermission(), s.hiddenBlocks(), s.replacementBlocks());
+        }
+        return s;
     }
 
     private Boolean featureSeeds() {
@@ -125,12 +193,23 @@ public final class SentinelAXray extends JavaPlugin {
             EngineProbe.Running run = EngineProbe.running(w);
             parts.add(w.getName() + "=" + (run.active() ? "mode " + run.mode() : run.mode() == 0 ? "off" : "unknown"));
         }
-        return String.join(", ", parts) + "; mining analysis " + (monitor.enabled() ? "on" : "off")
+        return String.join(", ", parts) + "; " + layer.status() + "; mining analysis " + (monitor.enabled() ? "on" : "off")
                 + " (" + monitor.flags() + " flags)";
     }
 
     private List<String> applyAll(boolean dryRun) {
         List<String> out = new ArrayList<>();
+        // Defaults for every world without its own setting: worlds created later and Multiverse worlds.
+        try {
+            Path defaults = Path.of("config", "paper-world-defaults.yml");
+            if (java.nio.file.Files.isRegularFile(defaults)) {
+                WorldConfigWriter.Result r = WorldConfigWriter.apply(defaults, desired("overworld"), featureSeeds(), dryRun);
+                out.add("defaults: " + (r == WorldConfigWriter.Result.UNCHANGED ? "already up to date"
+                        : dryRun ? "would change " + defaults : "written to " + defaults + " (restart Paper to activate)"));
+            }
+        } catch (IOException | InvalidConfigurationException | RuntimeException e) {
+            out.add("defaults: failed - " + e.getMessage());
+        }
         for (World w : getServer().getWorlds()) {
             if (!eligible(w)) continue;
             try {
@@ -157,6 +236,7 @@ public final class SentinelAXray extends JavaPlugin {
                     if (needsAction(line)) pending.add(line);
                     sender.sendMessage(line);
                 }
+                sender.sendMessage(layer.status());
                 sender.sendMessage("mining analysis: " + (monitor.enabled() ? "on" : "off") + ", players tracked: "
                         + monitor.tracked() + ", flags: " + monitor.flags());
             }

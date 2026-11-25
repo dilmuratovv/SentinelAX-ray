@@ -47,6 +47,15 @@ final class MiningMonitor implements Listener {
     private Set<Material> filler = EnumSet.noneOf(Material.class);
 
     private final Map<UUID, MiningStats> stats = new HashMap<>();
+    /** Direction choices (tunnel turns, TNT spots) per player, kept longer than the filler window. */
+    private final Map<UUID, ChoiceTest> choices = new HashMap<>();
+    private final Map<UUID, int[]> heading = new HashMap<>();      // dx, dz of the current tunnel, and turn x, z
+    private final Map<Long, UUID> bedUsers = new HashMap<>();       // bed / anchor block -> player who used it
+    private final Map<Long, Long> bedTimes = new HashMap<>();
+    private uz.sentinel.xray.los.OreLayer layer;
+    private long choiceWindowMillis;
+    private int choiceMinHits, lookAhead;
+    private double choiceMaxP;
     private final Map<UUID, ArrayDeque<Long>> dugOrder = new HashMap<>();
     private final Map<UUID, Set<Long>> dug = new HashMap<>();
     private final Map<UUID, LinkedHashMap<Long, Long>> counted = new HashMap<>(); // world -> vein block -> time
@@ -54,6 +63,8 @@ final class MiningMonitor implements Listener {
     private long flags;
 
     MiningMonitor(Plugin plugin) { this.plugin = plugin; }
+
+    void layer(uz.sentinel.xray.los.OreLayer layer) { this.layer = layer; }
 
     void configure(ConfigurationSection c, Consumer<String> warn) {
         enabled = c.getBoolean("enabled", true);
@@ -63,6 +74,10 @@ final class MiningMonitor implements Listener {
         minVeins = Math.max(1, c.getInt("min-hidden-veins", 5));
         maxFillerPerVein = Math.max(1, c.getDouble("max-filler-per-vein", 40));
         fillerMaxY = c.getInt("overworld-filler-max-y", 64);
+        choiceWindowMillis = Math.max(1, c.getLong("choices.window-minutes", 120)) * 60_000L;
+        choiceMinHits = Math.max(2, c.getInt("choices.min-hits", 4));
+        choiceMaxP = Math.max(1e-12, Math.min(0.01, c.getDouble("choices.max-p", 1e-4)));
+        lookAhead = Math.max(4, Math.min(32, c.getInt("choices.look-ahead", 16)));
         Map<Material, String> v = new EnumMap<>(Material.class);
         ConfigurationSection groups = c.getConfigurationSection("valuable");
         if (groups != null) for (String group : groups.getKeys(false)) {
@@ -79,6 +94,11 @@ final class MiningMonitor implements Listener {
         }
         valuable = v;
         filler = f;
+    }
+
+    /** True where both filler and veins are counted: anywhere in the Nether, up to {@code fillerMaxY} in the overworld. */
+    static boolean measurable(boolean nether, int y, int fillerMaxY) {
+        return nether || y <= fillerMaxY;
     }
 
     private static boolean eligible(World w) {
@@ -107,11 +127,12 @@ final class MiningMonitor implements Listener {
         Material type = b.getType();
         MiningStats st = stats.computeIfAbsent(p.getUniqueId(), k -> new MiningStats());
         st.prune(now, windowMillis);
-        if (filler.contains(type) && (w.getEnvironment() == World.Environment.NETHER || b.getY() <= fillerMaxY)) {
-            st.filler(now);
-        }
+        boolean measurable = measurable(w.getEnvironment() == World.Environment.NETHER, b.getY(), fillerMaxY);
+        if (filler.contains(type) && measurable) st.filler(now);
         String group = valuable.get(type);
-        if (group != null && !isPlaced(w, key) && !isCounted(w, key, now)) {
+        // Veins are only judged where the filler around them is counted too; otherwise a legit miner in the
+        // mountains (emeralds above the filler height) would show 0 filler per vein and look like x-ray.
+        if (group != null && measurable && !isPlaced(w, key) && !isCounted(w, key, now)) {
             VeinAnalyzer.Vein vein = VeinAnalyzer.analyze(grid(w), b.getX(), b.getY(), b.getZ(), dugSet(p), 32);
             LinkedHashMap<Long, Long> c = counted.computeIfAbsent(w.getUID(), k -> new LinkedHashMap<>());
             for (long k : vein.blocks()) c.put(k, now);
@@ -123,12 +144,146 @@ final class MiningMonitor implements Listener {
                         + w.getName() + " " + b.getX() + "," + b.getY() + "," + b.getZ(), false);
             }
         }
+        if (measurable && (filler.contains(type) || group != null)) turn(p, b, now);
         remember(p, key);
     }
 
-    @EventHandler public void quit(PlayerQuitEvent e) {
-        dug.remove(e.getPlayer().getUniqueId());
-        dugOrder.remove(e.getPlayer().getUniqueId());
+    // ------------------------------------------------------------------ direction choices
+
+    private static final int[][] DIRS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+
+    /**
+     * A block dug straight beside the player's feet tells which way they tunnel. When that way changes (not back the
+     * way they came), it is a choice: does the chosen way hold valuable ore the player could not see, and how many of
+     * the other ways (straight on, left, right) do?
+     */
+    private void turn(Player p, Block b, long now) {
+        var feet = p.getLocation();
+        int fx = feet.getBlockX(), fz = feet.getBlockZ();
+        int rx = b.getX() - fx, rz = b.getZ() - fz, ry = b.getY() - feet.getBlockY();
+        if (Math.abs(rx) + Math.abs(rz) != 1 || ry < -1 || ry > 2) return; // not tunnelling from where they stand
+        int[] h = heading.get(p.getUniqueId());
+        if (h == null) { heading.put(p.getUniqueId(), new int[]{rx, rz, fx, fz}); return; }
+        if (h[0] == rx && h[1] == rz) return;                       // same way on
+        boolean back = h[0] == -rx && h[1] == -rz;
+        boolean closeToLast = Math.abs(fx - h[2]) + Math.abs(fz - h[3]) < 2; // a one-block zig-zag is no new choice
+        heading.put(p.getUniqueId(), new int[]{rx, rz, fx, fz});
+        if (back || closeToLast) return;                            // turning round, or zig-zag at one spot
+        World w = b.getWorld();
+        int y = feet.getBlockY();
+        int options = 0, withOre = 0;
+        boolean hit = false;
+        for (int[] d : DIRS) {
+            if (d[0] == -h[0] && d[1] == -h[1]) continue;           // where they came from is no choice
+            options++;
+            boolean ore = hiddenOreAhead(p, w, fx, y, fz, d[0], d[1]);
+            if (ore) withOre++;
+            if (d[0] == rx && d[1] == rz) hit = ore;
+        }
+        ChoiceTest t = choices.computeIfAbsent(p.getUniqueId(), k -> new ChoiceTest());
+        t.prune(now, choiceWindowMillis);
+        t.choice(now, hit, options, withOre);
+        judgeChoices(p, t, now, "tunnel turns");
+    }
+
+    /**
+     * Hidden valuable ore within {@code lookAhead} blocks going (dx, dz) from (x, y, z), in a band 5 wide and 4 high
+     * around the tunnel: where a tunnel that way would lead someone who sees ore.
+     */
+    private boolean hiddenOreAhead(Player p, World w, int x, int y, int z, int dx, int dz) {
+        for (int step = 1; step <= lookAhead; step++) {
+            for (int side = -2; side <= 2; side++) {
+                int bx = x + dx * step + (dz != 0 ? side : 0), bz = z + dz * step + (dx != 0 ? side : 0);
+                for (int dy = -1; dy <= 2; dy++) if (hiddenOre(p, w, bx, y + dy, bz)) return true;
+            }
+        }
+        return false;
+    }
+
+    /** A valuable ore the player could not have seen: hidden by the line-of-sight layer, or touching no open space. */
+    private boolean hiddenOre(Player p, World w, int x, int y, int z) {
+        if (y < w.getMinHeight() || y >= w.getMaxHeight() || !w.isChunkLoaded(x >> 4, z >> 4)) return false;
+        if (!valuable.containsKey(w.getType(x, y, z))) return false;
+        // With the layer: ore the player was never shown (hidden in their client, or in a chunk not sent to them yet).
+        if (layer != null && layer.active()) return !layer.revealedTo(p, x, y, z);
+        for (int[] f : new int[][]{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}}) {
+            int nx = x + f[0], ny = y + f[1], nz = z + f[2];
+            if (ny >= w.getMinHeight() && ny < w.getMaxHeight() && !w.getType(nx, ny, nz).isOccluding()) return false;
+        }
+        return true;
+    }
+
+    private void judgeChoices(Player p, ChoiceTest t, long now, String what) {
+        int confidence = t.suspicion(choiceMinHits, choiceMaxP);
+        MiningStats st = stats.computeIfAbsent(p.getUniqueId(), k -> new MiningStats());
+        if (confidence > 0 && st.mayFlag(now, cooldownMillis)) {
+            report(p, confidence, String.format(Locale.ROOT, "%s: chose hidden ore %d of %d times where blind choices"
+                    + " would find it %.1f times (p=%.1e)", what, t.hits(), t.count(), t.expected(), t.pValue()), false);
+        }
+    }
+
+    /** Beds and respawn anchors blow up in the Nether: remember who used one, the explosion follows. */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void use(org.bukkit.event.player.PlayerInteractEvent e) {
+        if (!enabled || e.getClickedBlock() == null || e.getAction() != org.bukkit.event.block.Action.RIGHT_CLICK_BLOCK) return;
+        Material m = e.getClickedBlock().getType();
+        if (!m.name().endsWith("_BED") && m != Material.RESPAWN_ANCHOR) return;
+        Block b = e.getClickedBlock();
+        long k = VeinAnalyzer.key(b.getX(), b.getY(), b.getZ());
+        bedUsers.put(k, e.getPlayer().getUniqueId());
+        bedTimes.put(k, System.currentTimeMillis());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void tnt(org.bukkit.event.entity.EntityExplodeEvent e) {
+        if (!enabled || !(e.getEntity() instanceof org.bukkit.entity.TNTPrimed tnt) || !(tnt.getSource() instanceof Player p)) return;
+        explosion(p, e.getLocation());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void bed(org.bukkit.event.block.BlockExplodeEvent e) {
+        if (!enabled) return;
+        Block b = e.getBlock();
+        long k = VeinAnalyzer.key(b.getX(), b.getY(), b.getZ());
+        UUID who = bedUsers.remove(k);
+        Long at = bedTimes.remove(k);
+        Player p = who == null ? null : Bukkit.getPlayer(who);
+        if (p != null && at != null && System.currentTimeMillis() - at < 3000) explosion(p, b.getLocation());
+    }
+
+    /**
+     * Where to blow something up is a choice too (Nether debris): the spot and four spots 6 blocks around it; each
+     * holds hidden ore when some lies within 2 blocks of it.
+     */
+    private void explosion(Player p, org.bukkit.Location at) {
+        World w = at.getWorld();
+        if (!eligible(w) || p.getGameMode() == GameMode.SPECTATOR || (ignoreCreative && p.getGameMode() == GameMode.CREATIVE)) return;
+        int x = at.getBlockX(), y = at.getBlockY(), z = at.getBlockZ();
+        boolean hit = oreAround(p, w, x, y, z);
+        int withOre = hit ? 1 : 0;
+        for (int[] d : DIRS) if (oreAround(p, w, x + d[0] * 6, y, z + d[1] * 6)) withOre++;
+        long now = System.currentTimeMillis();
+        ChoiceTest t = choices.computeIfAbsent(p.getUniqueId(), k -> new ChoiceTest());
+        t.prune(now, choiceWindowMillis);
+        t.choice(now, hit, 5, withOre);
+        judgeChoices(p, t, now, "explosions");
+    }
+
+    private boolean oreAround(Player p, World w, int x, int y, int z) {
+        for (int dx = -2; dx <= 2; dx++) for (int dy = -2; dy <= 2; dy++) for (int dz = -2; dz <= 2; dz++) {
+            if (hiddenOre(p, w, x + dx, y + dy, z + dz)) return true;
+        }
+        return false;
+    }
+
+    /** The miner's own tunnel stays theirs after a rejoin (it is no "foreign opening" then); only the heading resets. */
+    @EventHandler public void quit(PlayerQuitEvent e) { heading.remove(e.getPlayer().getUniqueId()); }
+
+    String choices(UUID player) {
+        ChoiceTest t = choices.get(player);
+        if (t == null) return "no direction choices recorded";
+        t.prune(System.currentTimeMillis(), choiceWindowMillis);
+        return String.format(Locale.ROOT, "%d choices, %d toward hidden ore (blind expectation %.1f, p=%.1e)", t.count(), t.hits(), t.expected(), t.pValue());
     }
 
     /** Drops idle players and old vein marks (called every few minutes). */
@@ -141,6 +296,13 @@ final class MiningMonitor implements Listener {
             if (s.isEmpty()) it.remove();
         }
         for (LinkedHashMap<Long, Long> c : counted.values()) c.values().removeIf(t -> now - t > windowMillis * 4);
+        choices.values().forEach(t -> t.prune(now, choiceWindowMillis));
+        choices.values().removeIf(ChoiceTest::isEmpty);
+        bedTimes.entrySet().removeIf(e -> now - e.getValue() > 10_000);
+        bedUsers.keySet().retainAll(bedTimes.keySet());
+        // tunnels of players who are gone and idle are forgotten (they were kept over a rejoin)
+        dug.keySet().removeIf(id -> Bukkit.getPlayer(id) == null && !stats.containsKey(id));
+        dugOrder.keySet().retainAll(dug.keySet());
     }
 
     private boolean isPlaced(World w, long key) {
@@ -183,10 +345,10 @@ final class MiningMonitor implements Listener {
 
     String stats(UUID player) {
         MiningStats st = stats.get(player);
-        if (st == null) return "no mining recorded in the window";
+        if (st == null) return "no mining recorded in the window; " + choices(player);
         st.prune(System.currentTimeMillis(), windowMillis);
         int conf = st.suspicion(minVeins, maxFillerPerVein);
-        return describe(st) + ", suspicion=" + conf + "%";
+        return describe(st) + ", suspicion=" + conf + "%; " + choices(player);
     }
 
     void report(Player p, int confidence, String detail, boolean test) {

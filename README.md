@@ -36,8 +36,8 @@ Five plugins by **azicoo**, each with its own repository and release. Every one 
 |---|---|
 | [SentinelAC](https://github.com/dilmuratovv/SentinelAC) | Anticheat: prediction-based movement, combat and packet checks. |
 | [SentinelAD](https://github.com/dilmuratovv/SentinelAD) | Anti-dupe: a global item ledger that removes duplicated items. |
-| [SentinelAE](https://github.com/dilmuratovv/SentinelAE) | Anti-ESP: hidden players and armor stands are never sent to the client. |
-| [SentinelAX-ray](https://github.com/dilmuratovv/SentinelAX-ray) | Anti-xray: Paper's native engine set up per world, plus mining analysis. |
+| [SentinelAE](https://github.com/dilmuratovv/SentinelAE) | Anti-ESP: players, entities and storage blocks behind walls are never sent to the client. |
+| [SentinelAX-ray](https://github.com/dilmuratovv/SentinelAX-ray) | Anti-xray: Paper's engine plus line-of-sight ore hiding, and mining analysis. |
 | [SentinelGuard](https://github.com/dilmuratovv/SentinelGuard) | Moderation: bans, mutes, history, `/sus`; collects the flags of AC, AD and AX-ray. |
 
 Together: SentinelGuard adds the findings of SentinelAC, SentinelAD and SentinelAX-ray to `/sus`, and `/sg status` shows the state of SentinelAE and SentinelAX-ray. All five are GPL-3.0 and run on Paper 1.21 to 26.3 with one JAR each (SentinelGuard also has a Velocity JAR).
@@ -46,13 +46,14 @@ Together: SentinelGuard adds the findings of SentinelAC, SentinelAD and Sentinel
 
 | Area | What SentinelAX-ray provides |
 |---|---|
+| **Line of sight** | Valuable ores the engine sends anyway (on cave walls, in ravines, above its height) are sent as stone, deepslate or netherrack until the player can see them; out of sight for a while, they are hidden again. Works at every height and without a restart. |
 | **Native engine** | Paper's anti-xray, configured for every overworld and nether world: x-ray clients never receive the real positions of enclosed ores. |
 | **Right file, every version** | Writes the `paper-world.yml` Paper actually reads (26.x: `world/dimensions/<ns>/<name>/`, 1.21: the world folder). Backed up once, written atomically, other keys kept. |
 | **Automatic setup** | Settings are written on first start; one restart activates them. |
 | **Honest status** | `/sxray status` reads the engine that is really running in each world. While it is not active, every start logs a warning and admins see it on join. |
-| **Mining analysis** | Flags players who keep reaching hidden diamond, debris or emerald veins with very little digging — what ore simulators look like. |
+| **Mining analysis** | Flags players who keep choosing the way to ore they cannot see: each tunnel turn (and each TNT, bed or anchor blast) is compared with the ways they did not take, so luck and rich areas are accounted for. Also flags very little digging per hidden vein. Catches x-ray and ore simulators. |
 | **Alerts only** | Analysis never blocks mining or punishes; staff and `/sus` decide. |
-| **Anti seed-cracking** | Optional random feature seeds, so ores in new chunks cannot be computed from the world seed. |
+| **Anti seed-cracking** | Random feature seeds by default, so ores in new chunks cannot be computed from the world seed. |
 
 ## How it works
 
@@ -62,14 +63,23 @@ Together: SentinelGuard adds the findings of SentinelAC, SentinelAD and Sentinel
 |---|---|
 | `1` hide | Enclosed ores are sent as stone. Cheapest. |
 | `2` obfuscate | Stone around players is mixed with fake ores. |
-| `3` obfuscate-layer (default) | Like 2, with one random fake per layer — real ores cannot be told from fakes. |
+| `3` obfuscate-layer | Like 2, with one random fake per layer — real ores cannot be told from fakes. |
+
+With the line-of-sight layer on (default) mode 1 is used: the engine hides enclosed ores and the layer hides the rest, so an x-ray client receives no valuable ore at all; fakes would only cost the layer work.
 
 Overworld up to y=64, nether up to y=128 by default. `update-radius: 2` reveals the real blocks around a block as soon as it is mined, so legitimate mining looks normal. The End is left alone.
 
 In testing on Paper 26.3, mode 1 sent **0 of 20** enclosed diamonds to the client, and in mode 3 enclosed diamonds were indistinguishable from the fakes in stone.
 
-### 2. Mining analysis
+### 2. Line of sight
 
+Paper's engine only hides ores that touch no air. SentinelAX-ray rewrites every chunk packet and block update so that diamonds, ancient debris, emeralds, gold and lapis arrive as their stand-in rock, and sends the real block once one of its faces is in the player's sight within `los.reveal-distance` (64). The rewrite works on every section format from 1.21 to 26.3 and changes no packet length. A revealed ore that has been out of sight for 10 s and is more than 16 blocks away is hidden again.
+
+### 3. Mining analysis
+
+**Direction choices.** Each time a player turns their tunnel (and each spot they blow up with TNT, a bed or a respawn anchor), SentinelAX-ray looks 16 blocks down every way they could have gone and checks which ways hold valuable ore the player was never shown. A blind miner picks a way with ore exactly as often as chance allows; x-ray and ore simulators pick it far more often. The hits are compared with the exact Poisson-binomial distribution of those chances; at a probability of 1 in 10,000 (`detection.choices.max-p`) or less the player is flagged. The test calibrates itself to how rich the area is.
+
+**Digging per vein.** 
 Each time a player mines a diamond, ancient debris or emerald vein, SentinelAX-ray checks whether the vein was already open to a cave or another tunnel (the player's own tunnel does not count). A player who finds at least `min-hidden-veins` **hidden** veins within `window-minutes` while mining fewer than `max-filler-per-vein` filler blocks (stone, deepslate, netherrack...) per vein is flagged. Ores the player placed are ignored.
 
 Flags go to the console, to staff with `sentinelaxray.alerts`, and to the `XrayFlagEvent` API. In testing, x-ray style mining (about 20 blocks per vein) was flagged at 75%; normal mining (about 140 blocks per vein) and ores in caves were not.
@@ -89,14 +99,16 @@ Upgrading from 2.0.0 keeps your `config.yml`, including `engine.auto-apply: fals
 
 | Key | Default | Purpose |
 |---|---|---|
-| `engine.mode` | `3` | Engine mode (see above). |
+| `los.enabled` · `reveal-distance` · `rehide-after-ticks` · `blocks` | `true` · `64` · `200` · valuable ores | The line-of-sight layer. |
+| `engine.mode` | `1` | Engine mode (see above); 1 whenever the line-of-sight layer is on. |
 | `engine.auto-apply` | `true` | Write engine settings on every start (`false`: only through `/sxray apply`). |
 | `engine.update-radius` | `2` | Blocks revealed around a mined block. |
 | `engine.overworld.max-block-height` · `nether.max-block-height` | `64` · `128` | Highest Y that is hidden. Higher costs more CPU and traffic. |
 | `engine.<world>.hidden-blocks` · `replacement-blocks` | ores, chests, spawners... | What is hidden and what fakes are made of. |
-| `engine.random-feature-seeds` | `unchanged` | `true` makes ores in new chunks independent of the world seed. |
+| `engine.random-feature-seeds` | `true` | Ores in new chunks are independent of the world seed. |
 | `detection.enabled` | `true` | Mining analysis. |
 | `detection.window-minutes` · `min-hidden-veins` · `max-filler-per-vein` | `30` · `5` · `40` | When a player is flagged. |
+| `detection.choices.window-minutes` · `min-hits` · `max-p` · `look-ahead` | `120` · `4` · `0.0001` · `16` | Direction-choice test. |
 | `detection.alert-cooldown-seconds` | `120` | Minimum time between two alerts for one player. |
 | `detection.valuable` · `filler` | diamond, debris, emerald · stone types | What counts as a vein and as digging. |
 
@@ -128,7 +140,8 @@ The JAR is compiled against the oldest supported API (Paper 1.21); every class a
 
 ### Good to know
 
-- Ores above `max-block-height` (mountain emeralds, high iron and coal) are not hidden.
+- The line-of-sight layer covers the valuable ores at every height; other ores (iron, coal, copper) above `max-block-height` are left to the engine's height limit. Cave shapes themselves are not hidden (no anti-xray hides air).
+- Ore simulators compute ores from the world seed: random feature seeds protect new chunks only, the direction-choice test catches the mining in old ones.
 - Mining analysis is statistical: a very lucky player or a very careful cheater can be misjudged, which is why it only alerts.
 - Mode 3 makes chunk packets about 28% larger in testing (mode 1 slightly smaller than vanilla).
 

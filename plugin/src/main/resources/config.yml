@@ -2,15 +2,32 @@
 # 1) Paper's native anti-xray engine rewrites every chunk packet before it leaves the server, so an x-ray client
 #    never receives the real positions of hidden ores. This plugin writes the right settings into each world's
 #    paper-world.yml: run /sxray apply, then restart Paper. /sxray status shows what is really running.
-# 2) Mining analysis flags players who keep digging straight to hidden ore veins (ore simulators / seed crackers
-#    bypass obfuscation, this catches them). Alerts only; nothing is blocked or punished.
+# 2) The line-of-sight layer hides valuable ores that the engine sends (on cave walls, in ravines, above its height
+#    limit) until the player can actually see them. Works without a restart.
+# 3) Mining analysis flags players who keep choosing the way to ore they cannot see (x-ray, ore simulators / seed
+#    crackers). Alerts only; nothing is blocked or punished.
+
+los:
+  enabled: true
+  # Real ore is sent once one of its faces is in sight within this distance; out of sight for rehide-after-ticks
+  # and more than 16 blocks away, it is hidden again.
+  reveal-distance: 64
+  check-ticks: 3
+  max-micros-per-tick: 2000
+  rehide-after-ticks: 200
+  # Ores hidden by this layer (stand-in: deepslate for deepslate ores, netherrack for Nether ores, stone otherwise).
+  blocks: [diamond_ore, deepslate_diamond_ore, ancient_debris, emerald_ore, deepslate_emerald_ore, gold_ore,
+    deepslate_gold_ore, nether_gold_ore, lapis_ore, deepslate_lapis_ore]
+  debug: false
 
 engine:
   # 1 = hide:            hidden ores not touching air are sent as stone/deepslate/netherrack. Cheapest.
   # 2 = obfuscate:       additionally every replacement block not touching air is sent as a random hidden block,
   #                      so an x-ray client sees ores everywhere. Strongest, more bandwidth.
-  # 3 = obfuscate-layer: like 2, but one random block per layer; strong and cheaper than 2 (recommended).
-  mode: 3
+  # 3 = obfuscate-layer: like 2, but one random block per layer; strong and cheaper than 2.
+  # With the line-of-sight layer on, mode 1 is used whatever is set here (the layer hides what mode 1 sends, so an
+  # x-ray client sees no valuable ore at all; fake ores of modes 2/3 would only cost the layer work).
+  mode: 1
   # 2 = also re-send real blocks two blocks around a broken block (Paper's maximum, recommended).
   update-radius: 2
   lava-obscures: false
@@ -20,7 +37,7 @@ engine:
   auto-apply: true
   # Ore simulators compute ore positions from the world seed and ignore obfuscation. true gives every feature a
   # random seed in NEWLY generated chunks (existing chunks keep their ores). "unchanged" leaves the setting alone.
-  random-feature-seeds: unchanged
+  random-feature-seeds: true
   overworld:
     # Highest y (exclusive, multiple of 16) the engine works up to. 64 covers diamonds, gold, redstone, lapis and
     # most iron/copper; higher costs more CPU and bandwidth.
@@ -46,9 +63,20 @@ detection:
   # roughly 100+ blocks per diamond vein; digging straight to them needs far fewer.
   min-hidden-veins: 5
   max-filler-per-vein: 40
-  # Filler blocks above this y in the overworld (building, terraforming) are not counted.
+  # Above this y in the overworld neither filler blocks (building, terraforming) nor veins (mountain emeralds) are
+  # counted, so a vein is always judged together with the digging around it. The Nether is counted at every height.
   overworld-filler-max-y: 64
   alert-cooldown-seconds: 120
+  # Direction choices: each turn of a tunnel (and each spot a player blows up with TNT, a bed or an anchor) is a
+  # choice between ways that do or do not hold valuable ore the player cannot see. Blind miners hit ore as often as
+  # chance allows; x-ray and ore simulators hit it far more often. Flags when at least min-hits choices hit and the
+  # chance of that many hits by luck is at most max-p (1e-4: about 1 in 10,000 honest players over a session).
+  choices:
+    window-minutes: 120
+    min-hits: 4
+    max-p: 0.0001
+    # Blocks ahead (in a band 5 wide, 4 high) that count as "that way".
+    look-ahead: 16
   valuable:
     diamond: [diamond_ore, deepslate_diamond_ore]
     debris: [ancient_debris]

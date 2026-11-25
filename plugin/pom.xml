@@ -4,7 +4,7 @@
   <parent>
     <groupId>uz.sentinel.xray</groupId>
     <artifactId>sentinelaxray-parent</artifactId>
-    <version>2.1.0</version>
+    <version>2.2.0</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
   <artifactId>SentinelAX-ray</artifactId>
@@ -34,6 +34,13 @@
       <groupId>io.papermc.paper</groupId>
       <artifactId>paper-api</artifactId>
       <version>${paper.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <!-- Paper ships Netty; only the handler base class is compiled against (stable between 4.1 and 4.2). -->
+      <groupId>io.netty</groupId>
+      <artifactId>netty-transport</artifactId>
+      <version>4.1.118.Final</version>
       <scope>provided</scope>
     </dependency>
     <dependency>
