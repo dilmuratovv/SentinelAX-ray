@@ -4,7 +4,7 @@
   NODE_PATH=<lab>/node-ae/node_modules python3 tools/mining_probe.py --paper paper.jar --java java --jar AX-ray.jar \
       --harness SentinelAXrayHarness.jar [--via ...] --mojang-cache dir --work dir --accept-eula
 """
-import argparse, shutil, socket, sys
+import argparse, os, shutil, socket, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from axray_probe import Proc, BOT
@@ -30,6 +30,9 @@ def main():
         shutil.copy2(jar, d / 'plugins' / jar.name)
     if a.mojang_cache:
         shutil.copytree(a.mojang_cache, d / 'cache')
+    if os.environ.get('SENTINEL_LIBS_SEED') and not (d / 'libraries').exists():
+        # lab only: libraries of an earlier run of this Paper version, so plugins download nothing
+        shutil.copytree(os.environ['SENTINEL_LIBS_SEED'], d / 'libraries')
     (d / 'eula.txt').write_text('eula=true\n')
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0)); port = s.getsockname()[1]

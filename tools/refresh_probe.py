@@ -13,7 +13,7 @@ Two viewer bots stand side by side; after a refresh each one must still get the 
 
 The probe plugin is tools/refresh-probe (javac against a Paper API, plus its plugin.yml).
 """
-import argparse, json, queue, shutil, socket, subprocess, sys, threading, time
+import argparse, os, json, queue, shutil, socket, subprocess, sys, threading, time
 from pathlib import Path
 
 BOT = Path(__file__).resolve().parent / 'client' / 'viewer.cjs'
@@ -71,6 +71,9 @@ def main():
         shutil.copy2(jar, d / 'plugins' / jar.name)
     if a.mojang_cache:
         shutil.copytree(a.mojang_cache, d / 'cache')
+    if os.environ.get('SENTINEL_LIBS_SEED') and not (d / 'libraries').exists():
+        # lab only: libraries of an earlier run of this Paper version, so plugins download nothing
+        shutil.copytree(os.environ['SENTINEL_LIBS_SEED'], d / 'libraries')
     (d / 'eula.txt').write_text('eula=true\n')
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0)); port = s.getsockname()[1]
@@ -163,8 +166,11 @@ def main():
 
         bad = [l for b in bots.values() for l in b.log if '"ev":"chunk-error"' in l or '"ev":"error"' in l or '"ev":"end"' in l]
         check('every chunk decoded and both clients stayed connected', not bad, ''.join(bad[:2]))
-        errs = [l for l in srv.log if 'Exception' in l or 'cannot be copied' in l]
-        check('no exceptions or copy fallbacks in the server log', not errs, ''.join(errs[:3]))
+        # only the plugins' own errors count (not e.g. Mojang's service lookups failing on an offline test box)
+        errs = [l for l in srv.log if 'cannot be copied' in l or 'at uz.sentinel' in l
+                or ('[Sentinel' in l and ('ERROR' in l or 'Exception' in l or 'SEVERE' in l))
+                or ('Error resolving libraries' in l)]
+        check('no Sentinel errors or copy fallbacks in the server log', not errs, ''.join(errs[:3]))
     finally:
         for b in bots.values():
             b.p.kill()
