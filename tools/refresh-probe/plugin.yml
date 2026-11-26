@@ -1,0 +1,8 @@
+name: SentinelRefreshProbe
+version: '1'
+main: uz.sentinel.aetest.RefreshProbe
+api-version: '1.21'
+description: Test-only. Calls World#refreshChunk, which Paper sends as ONE packet object to every watching player. Never install on a real server.
+commands:
+  refreshchunk:
+    description: refreshchunk <chunkX> <chunkZ>

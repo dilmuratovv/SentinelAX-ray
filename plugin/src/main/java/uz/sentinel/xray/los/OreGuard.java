@@ -20,6 +20,7 @@ final class OreGuard extends ChannelOutboundHandlerAdapter {
     /** Where chunk packets that are left alone are reported (set by the plugin). */
     static volatile java.util.function.Consumer<String> warn = s -> { };
     private static final java.util.concurrent.atomic.AtomicLong LAST_WARN = new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicBoolean COPY_WARNED = new java.util.concurrent.atomic.AtomicBoolean();
 
     OreGuard(OreView view, OreNms nms) { this.view = view; this.nms = nms; }
 
@@ -44,18 +45,19 @@ final class OreGuard extends ChannelOutboundHandlerAdapter {
                 }
                 return changed ? nms.bundle(kept) : msg;
             }
-            case "ClientboundLevelChunkWithLightPacket": chunk(msg); return msg;
+            case "ClientboundLevelChunkWithLightPacket": return chunk(msg);
             case "ClientboundBlockUpdatePacket": return blockUpdate(msg);
             case "ClientboundSectionBlocksUpdatePacket": return sectionUpdate(msg);
             default: return msg;
         }
     }
 
-    private void chunk(Object packet) {
+    /** Returns the packet to send: the original, or this player's copy with ores hidden. */
+    private Object chunk(Object packet) {
         Object data = OreNms.call(packet, "getChunkData", "chunkData");
         int cx = OreNms.i(packet, "getX", "x"), cz = OreNms.i(packet, "getZ", "z");
-        if (data == null || cx == Integer.MIN_VALUE) return;
-        if (!(OreNms.get(data, "buffer") instanceof byte[] buf)) return;
+        if (data == null || cx == Integer.MIN_VALUE) return packet;
+        if (!(OreNms.get(data, "buffer") instanceof byte[] buf)) return packet;
         long chunk = OreNms.chunkKey(cx, cz);
         view.dropChunk(chunk);
         long before = ChunkFilter.UNPARSED.sum() + ChunkFilter.AMBIGUOUS.sum() + ChunkFilter.REJECTED.sum();
@@ -70,9 +72,16 @@ final class OreGuard extends ChannelOutboundHandlerAdapter {
                 warn.accept("Chunk packet left unchanged (x=" + cx + " z=" + cz + ", " + buf.length + " bytes, starts " + head + "): unreadable="
                         + ChunkFilter.UNPARSED.sum() + " ambiguous=" + ChunkFilter.AMBIGUOUS.sum() + " rejected=" + ChunkFilter.REJECTED.sum());
             }
-            return;
+            return packet;
         }
-        if (r.hidden().length == 0) return;
+        if (!r.changed()) return packet;
+        Object out = ChunkPackets.withBuffer(packet, r.data());
+        if (out == null) {
+            // Unknown packet shape: fall back to rewriting the packet's own bytes (correct unless Paper shares it).
+            System.arraycopy(r.data(), 0, buf, 0, buf.length);
+            out = packet;
+            if (!COPY_WARNED.getAndSet(true)) warn.accept("Chunk packets cannot be copied on this server version; rewriting them in place.");
+        }
         rewritten++;
         int minY = view.minY;
         long[] keys = new long[r.hidden().length];
@@ -82,6 +91,7 @@ final class OreGuard extends ChannelOutboundHandlerAdapter {
             view.hide(keys[i]);
         }
         view.fresh.add(keys);
+        return out;
     }
 
     private Object blockUpdate(Object packet) {

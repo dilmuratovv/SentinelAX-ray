@@ -3,7 +3,7 @@ package uz.sentinel.xray.los;
 import java.util.function.IntUnaryOperator;
 
 /**
- * Rewrites the block sections of a chunk packet in place so that chosen block states (chests, barrels, shulker
+ * Rewrites (a copy of) the block sections of a chunk packet so that chosen block states (chests, barrels, shulker
  * boxes, spawners...) arrive as something else (air, or stone for full blocks so a wall shows no hole). Pure Java, so it is unit tested against every section format.
  *
  * <p>Base finders read storage blocks straight from the chunk data the moment it arrives, so hiding them later with
@@ -16,8 +16,14 @@ import java.util.function.IntUnaryOperator;
 public final class ChunkFilter {
     private ChunkFilter() {}
 
-    /** Layout found and the hidden positions: {@code sectionIndex << 12 | y << 8 | z << 4 | x}. */
-    public record Result(int sections, boolean fluidCount, boolean lengthPrefix, int[] hidden) {}
+    /**
+     * Layout found, the hidden positions ({@code sectionIndex << 12 | y << 8 | z << 4 | x}) and the bytes to send:
+     * a rewritten copy when something was hidden, otherwise the input itself. The input is never changed, because
+     * Paper sends one chunk packet object to every player watching a refreshed chunk.
+     */
+    public record Result(int sections, boolean fluidCount, boolean lengthPrefix, int[] hidden, byte[] data) {
+        public boolean changed() { return hidden.length > 0; }
+    }
 
     private static final boolean[][] LAYOUTS = {{false, true}, {false, false}, {true, false}, {true, true}};
 
@@ -55,7 +61,7 @@ public final class ChunkFilter {
      * server's own layout is not one of them. The layout of the running version is tried first and used when it
      * reads the buffer exactly; any other layout is used only when it is the only one that fits (an all-air chunk
      * of zero bytes fits several, and a wrong guess there would rewrite bytes that are not palette entries). The
-     * rewrite happens on a copy and is checked to leave the structure unchanged before it replaces the packet's bytes.
+     * rewrite happens on a copy, which is checked to keep the structure and returned; {@code buf} is left as it is.
      * {@code fallback} is written when a stand-in's id does not fit the bytes of the palette entry it replaces (it
      * must be small, e.g. stone).
      */
@@ -78,8 +84,8 @@ public final class ChunkFilter {
         IntList hidden = new IntList();
         walk(work, layout[0], layout[1], replace, hidden, fallback);
         if (walk(work, layout[0], layout[1], null, null, 0) != sections) { REJECTED.increment(); return null; }
-        if (hidden.size() > 0) System.arraycopy(work, 0, buf, 0, buf.length);
-        return new Result(sections, layout[0], layout[1], hidden.toArray());
+        int[] found = hidden.toArray();
+        return new Result(sections, layout[0], layout[1], found, found.length > 0 ? work : buf);
     }
 
     /** Counts the sections of one layout (-1 when it does not fit); with {@code storage} set it also rewrites. */
