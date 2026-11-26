@@ -82,7 +82,7 @@ def main():
         return json.loads(line).get('block')
 
     try:
-        srv.pump('Done (', 300)
+        srv.pump('Done (', 600)
         # A solid stone hill (two fills: the command limit), a cave inside with ore on its walls, ore sealed in stone,
         # deepslate ore, and an emerald up in the sky on a pillar.
         cmd('forceload add -32 -32 48 48', wait=3)

@@ -40,7 +40,7 @@ def main():
     srv = Proc([a.java, '-Xms512M', '-Xmx1G', '-jar', str(a.paper.resolve()), '--nogui'], cwd=d)
     bots = []
     try:
-        srv.pump('Done (', 300)
+        srv.pump('Done (', 600)
         for n in ('Alice', 'Bob', 'Carol', 'Dave', 'Eve'):
             bots.append(Proc(['node', str(BOT), str(port), n, a.client_version]))
             srv.pump(f'{n} joined the game', 60)

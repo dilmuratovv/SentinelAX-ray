@@ -81,8 +81,12 @@ def main():
     java = [a.java, '-Xms256M', '-Xmx900M', '-jar', str(a.paper.resolve()), '--nogui']
     # first start writes the plugins' settings (AX-ray turns Paper's anti-xray on); the test runs after a restart
     first = Proc(java, cwd=d)
-    first.pump('Done (', 300)
-    first.send('stop'); first.p.wait(120)
+    try:
+        first.pump('Done (', 600)  # a fresh server patches Paper first; slow machines need the margin
+        first.send('stop'); first.p.wait(120)
+    finally:
+        if first.p.poll() is None:  # never leave a server behind (it would slow every later run)
+            first.p.kill()
     spigot = d / 'spigot.yml'  # the server's Netty thread count (settings.netty-threads)
     spigot.write_text(spigot.read_text().replace('netty-threads: 4', f'netty-threads: {a.netty_threads}'))
     if a.debug:
@@ -115,7 +119,7 @@ def main():
         return 'watchers=2' in line, line.strip()
 
     try:
-        srv.pump('Done (', 300)
+        srv.pump('Done (', 600)
         threads = next((l.strip() for l in srv.log if 'threads for Netty' in l), '')
         check(f'server runs {a.netty_threads} Netty thread(s)', f'Using {a.netty_threads} thread' in threads, threads)
         cmd('forceload add -32 -32 32 32', 'setworldspawn 4 -60 -12', wait=2)  # join out of sight of the test blocks
