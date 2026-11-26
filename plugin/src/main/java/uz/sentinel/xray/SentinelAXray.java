@@ -26,8 +26,10 @@ public final class SentinelAXray extends JavaPlugin {
 
     @Override public void onEnable() {
         saveDefaultConfig();
+        uz.sentinel.xray.los.ChunkFilter.expect(getServer().getMinecraftVersion());
         monitor = new MiningMonitor(this);
         layer = new uz.sentinel.xray.los.OreLayer(this);
+        uz.sentinel.xray.los.OreLayer.setChunkWarning(getLogger()::warning);
         monitor.layer(layer);
         reloadSettings();
         ConfigurationSection los = getConfig().getConfigurationSection("los");

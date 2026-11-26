@@ -261,6 +261,9 @@ public final class OreLayer {
         return false;
     }
 
+    /** Where chunk packets that are left alone are reported. */
+    public static void setChunkWarning(java.util.function.Consumer<String> warn) { OreGuard.warn = warn; }
+
     public String status() {
         if (!active()) return "line-of-sight layer off";
         int hidden = 0, revealed = 0;
@@ -272,6 +275,7 @@ public final class OreLayer {
         for (OreGuard g : guards.values()) { rewritten += g.rewritten; dropped += g.dropped; }
         return "line-of-sight layer on (" + ores.size() + " ores, " + nms.hiddenStates() + " states): hidden=" + hidden
                 + ", revealed=" + revealed + ", reveals=" + reveals + ", rehides=" + rehides + ", chunks rewritten="
-                + rewritten + ", updates held=" + dropped + ", rays=" + rays + (failedInjections > 0 ? ", injection failures=" + failedInjections : "");
+                + rewritten + ", chunks unreadable/ambiguous/rejected=" + ChunkFilter.UNPARSED.sum() + "/" + ChunkFilter.AMBIGUOUS.sum() + "/" + ChunkFilter.REJECTED.sum()
+                + ", updates held=" + dropped + ", rays=" + rays + (failedInjections > 0 ? ", injection failures=" + failedInjections : "");
     }
 }

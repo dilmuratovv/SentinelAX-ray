@@ -160,7 +160,7 @@ class ChunkFilterTest {
             for (int i = 0; i < ids.length; i++) ids[i] = i % 7 == 0 ? ORE : withDeepslate ? DEEPSLATE : STONE;
             b.section(ids, 4);
             byte[] buf = b.bytes.toByteArray();
-            ChunkFilter.Result r = ChunkFilter.hide(buf, id -> id == ORE ? DEEPSLATE : -1, STONEID);
+            ChunkFilter.Result r = ChunkFilter.hide(buf, id -> id == 200 ? 30000 : -1, 1);
             assertNotNull(r);
             int[] after = decode(buf, true, false, 0);
             for (int i = 0; i < 4096; i++) {
@@ -169,5 +169,42 @@ class ChunkFilterTest {
             }
             assertEquals(586, r.hidden().length);
         }
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void resetExpected() { ChunkFilter.expect("unknown"); }
+
+    @org.junit.jupiter.api.Test
+    void versionsMapToTheirLayout() {
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new boolean[]{true, false}, ChunkFilter.layoutOf("26.2"));
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new boolean[]{false, false}, ChunkFilter.layoutOf("1.21.11"));
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new boolean[]{false, true}, ChunkFilter.layoutOf("1.21.4"));
+        org.junit.jupiter.api.Assertions.assertNull(ChunkFilter.layoutOf("nonsense"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void anAllAirChunkFitsSeveralLayoutsAndIsNotGuessed() throws IOException {
+        Builder b = new Builder(true, false);
+        for (int i = 0; i < 24; i++) b.single(AIR);
+        byte[] chunk = b.bytes.toByteArray();
+        ChunkFilter.AMBIGUOUS.reset();
+        org.junit.jupiter.api.Assertions.assertNull(ChunkFilter.hide(chunk.clone(), id -> id == 200 ? 30000 : -1, 1));
+        org.junit.jupiter.api.Assertions.assertEquals(1, ChunkFilter.AMBIGUOUS.sum());
+        ChunkFilter.expect("26.2");
+        ChunkFilter.Result r = ChunkFilter.hide(chunk.clone(), id -> id == 200 ? 30000 : -1, 1);
+        org.junit.jupiter.api.Assertions.assertNotNull(r);
+        org.junit.jupiter.api.Assertions.assertEquals(24, r.sections());
+        org.junit.jupiter.api.Assertions.assertTrue(r.fluidCount());
+    }
+
+    @org.junit.jupiter.api.Test
+    void unreadableChunksAreCountedNotTouched() {
+        byte[] junk = new byte[64];
+        java.util.Arrays.fill(junk, (byte) 0xFF);
+        ChunkFilter.UNPARSED.reset();
+        ChunkFilter.expect("26.2");
+        org.junit.jupiter.api.Assertions.assertNull(ChunkFilter.hide(junk, id -> 0, 1));
+        org.junit.jupiter.api.Assertions.assertEquals(1, ChunkFilter.UNPARSED.sum());
+        for (byte x : junk) org.junit.jupiter.api.Assertions.assertEquals((byte) 0xFF, x);
     }
 }
